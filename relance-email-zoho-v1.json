@@ -1,0 +1,165 @@
+{
+  "name": "📧 Relances Email auto — Notion → Zoho (9h-15h aléatoire)",
+  "nodes": [
+    {
+      "id": "rz-trigger-001",
+      "name": "⏰ CRON 8h (Lun-Ven)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [80, 300],
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "cronExpression", "expression": "0 8 * * 1-5" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "rz-query-001",
+      "name": "🔍 Notion — Relances Email dues",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [320, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/databases/49c11bda-c9b4-47f7-82a2-3fbaac5a159a/query",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Notion-Version", "value": "2022-06-28" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyType": "raw",
+        "body": "{\"filter\":{\"and\":[{\"property\":\"Canal\",\"select\":{\"equals\":\"Email\"}},{\"property\":\"Relance due\",\"formula\":{\"string\":{\"equals\":\"true\"}}},{\"or\":[{\"property\":\"Statut\",\"select\":{\"equals\":\"Message envoyé\"}},{\"property\":\"Statut\",\"select\":{\"equals\":\"Relance 1 envoyée\"}},{\"property\":\"Statut\",\"select\":{\"equals\":\"Relance 2 envoyée\"}}]}]},\"page_size\":100}",
+        "options": { "timeout": 30000 }
+      },
+      "credentials": {
+        "notionApi": { "id": "REMPLACER_PAR_ID_CREDENTIAL_NOTION", "name": "Notion API" }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "rz-split-001",
+      "name": "🔀 Éclater les résultats",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [560, 300],
+      "parameters": { "fieldToSplitOut": "results" }
+    },
+    {
+      "id": "rz-code-001",
+      "name": "🧹 Préparer + planifier (aléatoire 9h-15h)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 300],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Mappe le Statut actuel vers la relance à envoyer aujourd'hui\nconst STATUT_MAP = {\n  'Message envoyé': { num: 1, relanceKey: 'Relance 1', nextStatut: 'Relance 1 envoyée', template: 'Relance 1' },\n  'Relance 1 envoyée': { num: 2, relanceKey: 'Relance 2', nextStatut: 'Relance 2 envoyée', template: 'Relance 2' },\n  'Relance 2 envoyée': { num: 3, relanceKey: 'Relance 3', nextStatut: 'Relance 3 envoyee', template: null }\n};\n\nfunction prop(props, name) {\n  const p = props[name];\n  if (!p) return '';\n  if (p.type === 'title') return (p.title[0] && p.title[0].plain_text) || '';\n  if (p.type === 'rich_text') return (p.rich_text[0] && p.rich_text[0].plain_text) || '';\n  if (p.type === 'email') return p.email || '';\n  if (p.type === 'select') return (p.select && p.select.name) || '';\n  return '';\n}\n\nconst todayISO = $today.toISODate();\nconst debut = $today.set({ hour: 9, minute: 0, second: 0, millisecond: 0 });\nconst fenetreSecondes = 6 * 3600; // fenêtre 9h → 15h\nconst maintenant = $now;\n\nconst out = [];\n\nfor (const item of $input.all()) {\n  const page = item.json;\n  const props = page.properties || {};\n  const statut = prop(props, 'Statut');\n  const map = STATUT_MAP[statut];\n  if (!map) continue; // rien à envoyer aujourd'hui pour cette fiche\n\n  const email = prop(props, 'Mail pro');\n  if (!email) continue; // pas d'email pro renseigné\n\n  const nom = prop(props, 'Nom');\n  const agence = prop(props, 'Agence');\n  const prenom = (nom || '').trim().split(' ')[0] || '';\n  const contenu = prop(props, map.relanceKey);\n\n  const m = contenu.match(/^Objet\\s*:\\s*(.*?)\\r?\\n+([\\s\\S]*)$/i);\n  const subject = m ? m[1].trim() : `Suivi — ${agence || nom}`;\n  const body = m ? m[2].trim() : contenu.trim();\n\n  const properties = {\n    'Statut': { select: { name: map.nextStatut } },\n    'Date dernière action': { date: { start: todayISO } }\n  };\n  if (map.template) {\n    properties['Template utilisé'] = { select: { name: map.template } };\n  }\n\n  let sendAt = debut.plus({ seconds: Math.floor(Math.random() * fenetreSecondes) });\n  if (sendAt < maintenant) sendAt = maintenant.plus({ seconds: 30 });\n\n  out.push({\n    json: {\n      pageId: page.id,\n      nom, prenom, agence, email,\n      statutActuel: statut,\n      relanceNum: map.num,\n      subject, body,\n      sendAt: sendAt.toISO(),\n      patchBody: JSON.stringify({ properties })\n    }\n  });\n}\n\nout.sort((a, b) => (a.json.sendAt < b.json.sendAt ? -1 : 1));\n\nreturn out;"
+      }
+    },
+    {
+      "id": "rz-batch-001",
+      "name": "🔁 Une relance à la fois",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1040, 300],
+      "parameters": { "batchSize": 1, "options": {} }
+    },
+    {
+      "id": "rz-wait-001",
+      "name": "⏳ Attendre l'heure aléatoire",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1280, 220],
+      "parameters": {
+        "resume": "specificTime",
+        "dateTime": "={{ $json.sendAt }}"
+      }
+    },
+    {
+      "id": "rz-email-001",
+      "name": "📧 Zoho — envoyer la relance",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1520, 220],
+      "parameters": {
+        "fromEmail": "REMPLACER_PAR_TON_EMAIL_ZOHO",
+        "toEmail": "={{ $json.email }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "text",
+        "text": "={{ $json.body }}",
+        "options": {}
+      },
+      "credentials": {
+        "smtp": { "id": "REMPLACER_PAR_ID_CREDENTIAL_ZOHO_SMTP", "name": "Zoho SMTP" }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "rz-update-001",
+      "name": "✅ Notion — statut mis à jour",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 220],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'https://api.notion.com/v1/pages/' + $('🧹 Préparer + planifier (aléatoire 9h-15h)').item.json.pageId }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Notion-Version", "value": "2022-06-28" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyType": "raw",
+        "body": "={{ $('🧹 Préparer + planifier (aléatoire 9h-15h)').item.json.patchBody }}",
+        "options": { "timeout": 30000 }
+      },
+      "credentials": {
+        "notionApi": { "id": "REMPLACER_PAR_ID_CREDENTIAL_NOTION", "name": "Notion API" }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "⏰ CRON 8h (Lun-Ven)": {
+      "main": [[{ "node": "🔍 Notion — Relances Email dues", "type": "main", "index": 0 }]]
+    },
+    "🔍 Notion — Relances Email dues": {
+      "main": [[{ "node": "🔀 Éclater les résultats", "type": "main", "index": 0 }]]
+    },
+    "🔀 Éclater les résultats": {
+      "main": [[{ "node": "🧹 Préparer + planifier (aléatoire 9h-15h)", "type": "main", "index": 0 }]]
+    },
+    "🧹 Préparer + planifier (aléatoire 9h-15h)": {
+      "main": [[{ "node": "🔁 Une relance à la fois", "type": "main", "index": 0 }]]
+    },
+    "🔁 Une relance à la fois": {
+      "main": [
+        [{ "node": "⏳ Attendre l'heure aléatoire", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "⏳ Attendre l'heure aléatoire": {
+      "main": [[{ "node": "📧 Zoho — envoyer la relance", "type": "main", "index": 0 }]]
+    },
+    "📧 Zoho — envoyer la relance": {
+      "main": [[{ "node": "✅ Notion — statut mis à jour", "type": "main", "index": 0 }]]
+    },
+    "✅ Notion — statut mis à jour": {
+      "main": [[{ "node": "🔁 Une relance à la fois", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1", "timezone": "Europe/Paris" },
+  "meta": { "instanceId": "bos-sedera" },
+  "tags": ["relance", "email", "notion", "zoho"]
+}
