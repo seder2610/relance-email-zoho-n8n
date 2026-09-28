@@ -71,7 +71,7 @@ Le workflow envoie les emails en SMTP — la méthode la plus simple, pas besoin
 
 3. Reconnecte les credentials sur chaque node concerné si l'import ne les a pas rattachés automatiquement.
 
-L'ID de la base Notion (`49c11bda-c9b4-47f7-82a2-3fbaac5a159a`) est déjà dans le workflow — pas besoin de le toucher.
+Remplace `REMPLACER_PAR_ID_BASE_NOTION` dans le nœud de requête Notion par l'ID de ta propre base.
 
 ---
 
