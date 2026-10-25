@@ -1,112 +1,99 @@
-# Relances Email auto — Notion → Zoho
+# Relances email automatiques : Notion → Zoho Mail (n8n)
 
-Chaque matin (Lun-Ven, 8h Paris), le workflow scanne ta base Notion **"📋 Prospection — Suivi vagues"**, trouve les fiches dont une relance email est due aujourd'hui, et les envoie une par une à des heures aléatoires entre 9h et 15h via ton compte Zoho Mail — sans que tu aies à y toucher.
+> **EN:** n8n workflow that every weekday morning queries a Notion prospecting base for email follow-ups that are due, then sends each one through Zoho Mail (SMTP) at a random time between 9:00 and 15:00 and updates the record's status.
+> **EN:** Follow-up subject and body are read from Notion columns; the "due" logic lives in a Notion formula, not in n8n.
+> **EN:** Not tested by the author yet: use the manual dry-run described below before activating.
 
----
+**FR :** Chaque matin en semaine, le workflow interroge une base Notion de prospection, repère les relances email dues, les envoie une par une via Zoho Mail à des heures aléatoires entre 9 h et 15 h, et met à jour le statut de chaque fiche.
 
-## 1. Comment ça marche
+## Problème → Solution → Pour qui
 
-```
-8h (Lun-Ven)
-   │
-   ▼
-Notion : requête sur la base — Canal = "Email" ET "Relance due" = true
-         ET Statut ∈ {Message envoyé, Relance 1 envoyée, Relance 2 envoyée}
-   │
-   ▼
-Code : pour chaque fiche → détermine quelle relance envoyer (1, 2 ou 3),
-       extrait Objet + Corps du texte stocké dans la colonne correspondante,
-       tire une heure aléatoire entre 9h et 15h, trie par ordre d'envoi
-   │
-   ▼
-Boucle (1 fiche à la fois) :
-   ⏳ Attendre l'heure tirée → 📧 Envoyer via Zoho (SMTP) → ✅ Notion : Statut mis à jour
-   │
-   └─ répète jusqu'à la dernière fiche du jour
-```
+- **Problème :** les relances email J+x sont oubliées ou envoyées toutes en même temps, à une heure qui trahit l'automatisation.
+- **Solution :** Notion décide quelles fiches sont dues (formule « Relance due »), n8n envoie le bon texte (relance 1, 2 ou 3) à une heure étalée et fait avancer le statut.
+- **Pour qui :** indépendants et agences qui suivent leur prospection dans Notion et envoient depuis Zoho Mail. Adaptable à un autre fournisseur SMTP en changeant le credential du nœud d'envoi.
 
-**Ce que la base Notion fait déjà pour toi :** la colonne formule **"Relance due"** calcule si une fiche doit être relancée aujourd'hui (à partir de "Date dernière action" + "Prochaine relance"). Le workflow s'appuie dessus — il n'y a pas de logique de date à gérer côté n8n.
+## Résultat
 
-**Important — la base mélange 2 canaux.** Les colonnes "Relance 1/2/3" servent aussi bien aux relances LinkedIn (Canal = "LinkedIn") qu'aux relances email (Canal = "Email"). Le filtre du workflow ne prend que les fiches **Canal = "Email"** — les relances LinkedIn dues le même jour ne sont pas touchées par ce workflow (elles ont besoin de leur propre automatisation ou d'un envoi manuel).
+Aucune exécution n'est documentée. Voici ce que le nœud de préparation produit à partir d'un texte de relance stocké dans Notion (**exemple fictif**, regex du nœud exécutée localement) :
 
----
-
-## 2. Avant de commencer
-
-- [ ] Compte **Zoho Mail** actif
-- [ ] Intégration **Notion** déjà connectée à n8n (credential `Notion API` — probablement déjà créée si tu as d'autres workflows Notion dans ce repo)
-- [ ] `n8n` self-hosted et accessible
-
-### Générer un mot de passe d'application Zoho (5 min, pas de code)
-
-Le workflow envoie les emails en SMTP — la méthode la plus simple, pas besoin d'app OAuth Zoho :
-
-1. Connecte-toi sur [mail.zoho.com](https://mail.zoho.com) → **Paramètres** → **Sécurité** → **Mots de passe d'application**.
-2. Génère un nouveau mot de passe d'application (nom libre, ex. "n8n relances").
-3. Note-le — il ne sera plus jamais affiché après.
-
-### Créer le credential SMTP dans n8n
-
-1. n8n → **Credentials** → **New** → **SMTP**.
-2. Renseigne :
-   - **Host** : `smtp.zoho.com` (ou `smtp.zoho.eu` si ton compte Zoho est hébergé en Europe)
-   - **Port** : `465`
-   - **SSL/TLS** : activé
-   - **User** : ton adresse Zoho complète (ex. `toi@tondomaine.com`)
-   - **Password** : le mot de passe d'application généré ci-dessus
-3. Sauvegarde, note l'ID du credential.
-
----
-
-## 3. Installer le workflow
-
-1. Dans n8n, **importe** `relance-email-zoho-v1.json` (menu `...` → Import from File).
-2. Remplace les placeholders (Ctrl+F dans l'éditeur, ou édite le JSON avant import) :
-
-   | Placeholder | Où le trouver |
-   |---|---|
-   | `REMPLACER_PAR_ID_CREDENTIAL_NOTION` | ID du credential Notion API (2 nodes concernés) |
-   | `REMPLACER_PAR_ID_CREDENTIAL_ZOHO_SMTP` | ID du credential SMTP créé à l'étape 2 |
-   | `REMPLACER_PAR_TON_EMAIL_ZOHO` | Ton adresse Zoho complète (champ "From" du node d'envoi) |
-
-3. Reconnecte les credentials sur chaque node concerné si l'import ne les a pas rattachés automatiquement.
-
-L'ID de la base Notion (`49c11bda-c9b4-47f7-82a2-3fbaac5a159a`) est déjà dans le workflow — pas besoin de le toucher.
-
----
-
-## 4. Point à vérifier avant d'activer (je n'ai pas d'instance n8n connectée pour tester en live)
-
-Le filtre Notion sur la colonne formule **"Relance due"** suppose qu'elle retourne un résultat de type **texte** (`"true"`/`"false"`), déduit de la configuration de ta vue "Relances dues" existante. Si le premier test renvoie 0 résultat alors que tu sais qu'une relance Email est due :
-
-1. Exécute manuellement le node **"🔍 Notion — Relances Email dues"** dans n8n.
-2. Si ça renvoie une erreur Notion du type *"Formula property doesn't support this filter"*, remplace dans le `body` du node :
-   ```
-   "formula":{"string":{"equals":"true"}}
-   ```
-   par :
-   ```
-   "formula":{"checkbox":{"equals":true}}
-   ```
-
----
-
-## 5. Premier test (sans rien casser)
-
-1. Laisse le workflow **inactif** (`active: false` par défaut).
-2. Dans n8n, clique **"Execute Workflow"** en manuel un matin où tu sais qu'au moins une fiche Email est due (regarde la vue **"Relances dues"** dans Notion, filtre sur Canal = Email).
-3. Vérifie : le node Code sort bien une fiche avec Objet/Corps corrects, une heure `sendAt` entre 9h et 15h.
-4. Laisse l'exécution tourner (ou stoppe après le node Code si tu ne veux pas attendre/envoyer pour de vrai) — le Wait peut durer jusqu'à 6h, c'est normal, n8n gère ça nativement.
-5. Une fois confiant : active le workflow.
-
----
-
-## 6. Dépannage
-
-| Symptôme | Cause probable | Fix |
+| Colonne Notion `Relance 1` (entrée) | Sujet extrait | Corps extrait |
 |---|---|---|
-| 0 résultat alors qu'une relance Email est due | Filtre formule "Relance due" au mauvais type | Voir section 4 |
-| Erreur SMTP 535 (auth failed) | Mot de passe normal utilisé au lieu du mot de passe d'application | Régénère un mot de passe d'application Zoho |
-| Email envoyé mais Notion pas mis à jour | `pageId` introuvable après le Wait | Vérifie que le node "✅ Notion — statut mis à jour" référence bien `$('🧹 Préparer + planifier...')` et non `$json` |
-| "Template utilisé" pas mis à jour sur la Relance 3 | Normal — l'option "Relance 3" n'existe pas dans ce champ select Notion (seules "Relance 1"/"Relance 2" existent). Le Statut, lui, est toujours mis à jour correctement. | Si tu veux ce suivi, ajoute l'option "Relance 3" dans la colonne Notion |
-| Relances envoyées le week-end alors que tu ne veux que Lun-Ven | — | Déjà en place (`0 8 * * 1-5`). Pour tous les jours, remplace par `0 8 * * *` |
+| `Objet : Suivi de ma proposition` puis une ligne vide et `Bonjour Camille, …` | `Suivi de ma proposition` | `Bonjour Camille, …` |
+
+Sans ligne `Objet :`, le sujet devient `Suivi — {agence}` et tout le texte sert de corps. Chaque fiche reçoit aussi une heure `sendAt` aléatoire entre 9 h et 15 h, et le workflow met à jour `Statut`, `Date dernière action` et `Template utilisé`.
+
+<!-- TODO capture: la vue Notion avant/après une exécution de test, et le nœud Code avec la liste triée par sendAt -->
+
+## Architecture
+
+```mermaid
+flowchart TD
+    C[Cron 8h lun-ven<br/>fuseau Europe/Paris] --> Q[Notion : fiches Canal = Email,<br/>Relance due, Statut éligible]
+    Q --> S[Éclater les résultats]
+    S --> P[Code : relance 1, 2 ou 3,<br/>objet + corps, heure aléatoire 9h-15h]
+    P --> L[Boucle : une fiche à la fois]
+    L --> W[Attendre l'heure tirée]
+    W --> Z[Envoyer via Zoho SMTP]
+    Z --> U[Notion : statut mis à jour]
+    U --> L
+```
+
+Statuts pris en compte : `Message envoyé` → relance 1, `Relance 1 envoyée` → relance 2, `Relance 2 envoyée` → relance 3. La base peut aussi contenir des fiches LinkedIn : seules celles avec `Canal = Email` sont traitées.
+
+## Prérequis
+
+- n8n auto-hébergé (un nœud Wait peut rester en attente jusqu'à environ 6 h) ; version minimale non vérifiée.
+- Compte Zoho Mail avec un mot de passe d'application ; credential SMTP n8n (`smtp.zoho.com` ou `smtp.zoho.eu`, port 465, SSL/TLS).
+- Credential Notion API et une base de prospection avec les propriétés ci-dessous.
+- Coût : aucun appel LLM ni API payante dans ce workflow.
+
+## Installation
+
+1. Zoho Mail → Paramètres → Sécurité → Mots de passe d'application : en générer un (affiché une seule fois).
+2. n8n → Credentials → New → SMTP : hôte `smtp.zoho.com` (ou `.eu`), port 465, SSL/TLS, utilisateur = votre adresse Zoho, mot de passe = celui de l'étape 1.
+3. Importer `relance-email-zoho-v1.json`.
+4. Remplacer les placeholders du tableau « Configuration » et reconnecter les credentials sur chaque nœud.
+5. Laisser le workflow inactif et lancer **Execute workflow** un matin où une fiche Email est due : vérifier la sortie du nœud Code (objet, corps, `sendAt`).
+6. Si la requête Notion renvoie 0 résultat ou une erreur sur la formule, adapter le filtre (voir « Statut et limites »).
+7. Une fois le test concluant, activer le workflow.
+
+## Configuration
+
+| Placeholder | Où le trouver | Nœud concerné |
+|---|---|---|
+| `<YOUR_NOTION_DATABASE_ID>` | URL de la base Notion (32 caractères) | 🔍 Notion — Relances Email dues |
+| `<YOUR_NOTION_CREDENTIAL_ID>` | n8n → Credentials (resélectionner) | les nœuds Notion (requête et mise à jour) |
+| `<YOUR_ZOHO_SMTP_CREDENTIAL_ID>` | credential SMTP créé à l'étape 2 | 📧 Zoho — envoyer la relance |
+| `<YOUR_ZOHO_EMAIL>` | votre adresse Zoho complète | champ « From » du nœud d'envoi |
+
+### Propriétés de la base Notion (lues dans le code)
+
+| Propriété | Type | Usage |
+|---|---|---|
+| `Nom`, `Agence` | Title / texte | personnalisation, sujet par défaut |
+| `Mail pro` | Email | destinataire (fiche ignorée si vide) |
+| `Canal` | Select | doit valoir `Email` |
+| `Statut` | Select | `Message envoyé`, `Relance 1 envoyée`, `Relance 2 envoyée`, puis `Relance 3 envoyee` (sans accent, tel qu'écrit dans le code : l'option doit exister telle quelle) |
+| `Relance 1`, `Relance 2`, `Relance 3` | Texte | `Objet : …` puis le corps |
+| `Relance due` | Formule | décide si la fiche est due aujourd'hui |
+| `Date dernière action` | Date | mise à jour à l'envoi |
+| `Template utilisé` | Select | options `Relance 1` et `Relance 2` (pas de mise à jour pour la relance 3) |
+
+## Statut et limites
+
+- **Statut : non testé.** Le workflow est fourni comme base ; il envoie de vrais emails, d'où l'essai à blanc recommandé.
+- Le filtre Notion suppose que la formule `Relance due` renvoie un texte (`"true"`). Si Notion répond *Formula property doesn't support this filter*, remplacer dans le corps de la requête `"formula":{"string":{"equals":"true"}}` par `"formula":{"checkbox":{"equals":true}}`.
+- Une relance envoyée dont la mise à jour Notion échoue sera renvoyée le lendemain (aucune protection contre le double envoi autre que le statut).
+- Les relances LinkedIn de la même base ne sont pas gérées.
+- Prospection par email : vérifiez la réglementation applicable (consentement, désinscription).
+
+| Symptôme | Cause probable | Action |
+|---|---|---|
+| 0 résultat alors qu'une relance est due | type de la formule | voir ci-dessus |
+| Erreur SMTP 535 | mot de passe normal au lieu du mot de passe d'application | en régénérer un |
+| Email envoyé, Notion non mis à jour | `pageId` introuvable après l'attente | vérifier que le nœud de mise à jour référence le nœud « 🧹 Préparer + planifier » |
+| Envois le week-end souhaités | cron `0 8 * * 1-5` | utiliser `0 8 * * *` |
+
+## Licence
+
+MIT, voir [LICENSE](LICENSE).
